@@ -1,0 +1,4 @@
+{
+    "dockerhub-id": "giwi2123/dsc180aq1project",
+    "build-script": "python final_project.py"
+}
