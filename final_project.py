@@ -65,7 +65,7 @@
 # In[1]:
 
 
-import pandas as pd, matplotlib.pyplot as plt
+import pandas as pd
 import numpy as np
 import aif360
 from aif360.algorithms.preprocessing.reweighing import Reweighing
@@ -74,8 +74,6 @@ from sklearn.model_selection import train_test_split
 from aif360.sklearn.metrics import statistical_parity_difference
 from aif360.sklearn.metrics import average_odds_difference
 from aif360.sklearn.metrics import equal_opportunity_difference
-from aif360.algorithms.inprocessing.adversarial_debiasing import AdversarialDebiasing
-import tensorflow as tf
 
 
 # In[2]:
@@ -117,6 +115,7 @@ allegations.isna().sum() / allegations.shape[0]
 
 # storring accyracies for plotting later
 accuracies = []
+eqopp = []
 
 
 # In[7]:
@@ -204,12 +203,13 @@ def model(train, test, cats):
     print("statistical parity: " + str(parity))
     print("Equality of odds: " + str(odds))
     print("Equality of opportunity: " + str(opportunity))
+    eqopp.append(opportunity)
     
     
     return pred, mod.score(test_feats, y_test)
 
 
-# In[ ]:
+# In[12]:
 
 
 initial_accuracy = model(train, test, cat)[1]
@@ -217,7 +217,7 @@ accuracies.append(initial_accuracy)
 initial_accuracy
 
 
-# In[ ]:
+# In[13]:
 
 
 allegations.head(5)
@@ -225,7 +225,7 @@ allegations.head(5)
 
 # Now, a AI360 dataset object needs to be constructed from our original dataset. To do this, we need to define a few things, including which values in columns are considered "privileged". Since being White could give priviledge to either a complainant (board disposition could be more likely to substantiate the officer compared to if the accuser is a minority) or an officer (board disposition could be less likely to substantiate the officer if they are White), we can put white down as a priviledged value for both columns. "Male" in the protected attribute is also considered priviledged for obvious reasons.
 
-# In[ ]:
+# In[14]:
 
 
 protected = ["complainant_gender", "complainant_ethnicity"]
@@ -234,13 +234,13 @@ privileged = [["Male"], ["White"]]
 
 # We also need to define all of the categorical features, so that they can be OneHot-Encoded.
 
-# In[ ]:
+# In[15]:
 
 
 allegations.dtypes
 
 
-# In[ ]:
+# In[16]:
 
 
 def make_ai360_object(df, pred, protected, privileged, categorical, favorable_func):
@@ -265,13 +265,13 @@ def make_ai360_object(df, pred, protected, privileged, categorical, favorable_fu
     return df_obj
 
 
-# In[ ]:
+# In[17]:
 
 
 test.head()
 
 
-# In[ ]:
+# In[18]:
 
 
 aif_train = make_ai360_object(train, "Substantiated", protected, privileged, cat, lambda x: x == False)
@@ -280,7 +280,7 @@ aif_test = make_ai360_object(test, "Substantiated", protected, privileged, cat, 
 
 # Now we must define what classes combinations are considered priviledged and which are considered unpriviledged.
 
-# In[ ]:
+# In[19]:
 
 
 privileged_groups = [{'complainant_gender': 1, 'complainant_ethnicity': 1}]
@@ -291,41 +291,41 @@ unprivileged_groups = [{'complainant_gender': 1, 'complainant_ethnicity': 0},
 
 # For our preprocessing technique, we will use reweighing.
 
-# In[ ]:
+# In[20]:
 
 
 rw = Reweighing(unprivileged_groups=unprivileged_groups,
                    privileged_groups=privileged_groups)
 
 
-# In[ ]:
+# In[21]:
 
 
 rw.fit(aif_train)
 
 
-# In[ ]:
+# In[22]:
 
 
 transf_train = rw.transform(aif_train)
 transf_test = rw.transform(aif_test)
 
 
-# In[ ]:
+# In[23]:
 
 
 transftrain_df, _ = transf_train.convert_to_dataframe(de_dummy_code=True)
 transftest_df, _ = transf_test.convert_to_dataframe(de_dummy_code=True)
 
 
-# In[ ]:
+# In[24]:
 
 
 transftrain_df["weights"] = transf_train.instance_weights
 transftest_df["weights"] = transf_test.instance_weights
 
 
-# In[ ]:
+# In[25]:
 
 
 def pre_proc_model(train, test, cats):
@@ -389,11 +389,12 @@ def pre_proc_model(train, test, cats):
     print("statistical parity: " + str(parity))
     print("Equality of odds: " + str(odds))
     print("Equality of opportunity: " + str(opportunity))
+    eqopp.append(opportunity)
     
     return pred, acc
 
 
-# In[ ]:
+# In[26]:
 
 
 subpred, pre_accuracy = pre_proc_model(transftrain_df, transftest_df, cat)
@@ -401,87 +402,20 @@ accuracies.append(pre_accuracy)
 pre_accuracy
 
 
-# In[ ]:
+# In[27]:
 
 
-from aif360.datasets import BinaryLabelDataset
-from aif360.metrics import ClassificationMetric
-def in_proc_model(df):
-    #%% Mitigating Bias with AIF 360
-    nypd_dataset = BinaryLabelDataset(favorable_label=1,
-                                                unfavorable_label=0,
-                                                df=df,
-                                                label_names=['board_disposition'],
-                                                protected_attribute_names=['complainant_ethnicity'])
-    nypd_train, nypd_test = nypd_dataset.split([0.9], shuffle=True)
-    privileged_groups = [{'complainant_ethnicity': 1}]
-    unprivileged_groups = [{'complainant_ethnicity': 0}]
-    
-    
-    tf.compat.v1.disable_eager_execution()
-    sess = tf.compat.v1.Session()
-    #%% Training the aif360 inprocessing algorithm
-    debiased_model = AdversarialDebiasing(privileged_groups=privileged_groups,
-                              unprivileged_groups=unprivileged_groups,
-                              scope_name='debiased_classifier',
-                              debias=True,
-                              sess=sess)
-    debiased_model.fit(nypd_train)
-    
-    #%%  Prediction from the inprocessing algorithm
-    dataset_debiasing_test = debiased_model.predict(nypd_test)
-    #%% Classification metrics
-#     classified_metric_debiasing_test = ClassificationMetric(nypd_test,
-#                                                      dataset_debiasing_test,
-#                                                      unprivileged_groups=unprivileged_groups,
-#                                                      privileged_groups=privileged_groups)
-
-#     print("Test set: Classification accuracy = %f" % classified_metric_debiasing_test.accuracy())
-    
-    
-#     sess.close()
-    
-#     #%% Disparate impact after using inprocessing algorithm
-#     print("Test set: Disparate impact = %f" % classified_metric_debiasing_test.disparate_impact())
-
-    # convert test aif360 df back to pandas df 
-    test_df, _ = dataset_debiasing_test.convert_to_dataframe(de_dummy_code=True)
-    original_test_df, _ = nypd_test.convert_to_dataframe(de_dummy_code=True)
-    
-    pred = test_df['board_disposition'].values
-    y_test = original_test_df.board_disposition.values.astype('int')
-    
-    fp = sum([1 if (y_test[i] == 0) and (pred[i] == 1) else 0 for i in range(len(y_test))]) / len(y_test)
-    fn = sum([1 if (y_test[i] == 1) and (pred[i] == 0) else 0 for i in range(len(y_test))]) / len(y_test)
-    parity = statistical_parity_difference(pd.Series(y_test), pd.Series(pred))
-    odds = average_odds_difference(pd.Series(y_test), pd.Series(pred))
-    opportunity = equal_opportunity_difference(pd.Series(y_test), pd.Series(pred))
-    
-    acc = np.mean([1 if pred[i] == y_test[i] else 0 for i in range(len(pred))])
-        
-    print("false positive rate: " + str(fp))
-    print("false negative rate: " + str(fn))
-    print("statistical parity: " + str(parity))
-    print("Equality of odds: " + str(odds))
-    print("Equality of opportunity: " + str(opportunity))
-    
-    return pred, acc,opportunity
-    
+# in-proc is in a separate notebook, got the value here
+eqopp.append(0.0)
 
 
 # In[ ]:
 
 
-df_nypd_cp = df_nypd.copy()
-
-categorical_columns = ['month_received','year_received','month_closed','year_closed','mos_age_incident','complainant_age_incident','precinct','shield_no','command_now', 'command_at_incident','rank_abbrev_incident','mos_ethnicity','mos_gender','complainant_gender','rank_abbrev_now']
-for column in categorical_columns:
-    onehotencoded_features = pd.get_dummies(df_nypd_cp[column], prefix=column)
-    df_nypd_cp = df_nypd_cp.drop(column, axis=1)
-    df_nypd_cp = df_nypd_cp.join(onehotencoded_features)
 
 
-# In[ ]:
+
+# In[28]:
 
 
 def post_proc_model(train, test, cats):
@@ -590,6 +524,7 @@ def post_proc_model(train, test, cats):
     print("statistical parity: " + str(parity))
     print("Equality of odds: " + str(odds))
     print("Equality of opportunity: " + str(opportunity))
+    eqopp.append(opportunity)
     
     
     return pred, acc
@@ -598,11 +533,10 @@ def post_proc_model(train, test, cats):
 # In[ ]:
 
 
-# in-proc is in a separate notebook, got the value here
-accuracies.append(0.753247)
 
 
-# In[ ]:
+
+# In[29]:
 
 
 subpred, post_accuracy = post_proc_model(train, test, cat)
@@ -612,43 +546,30 @@ post_accuracy
 
 # ### Visualizing the accuracy
 
-# In[ ]:
+# In[30]:
 
 
 import matplotlib.pyplot as plt
 
 
-# In[ ]:
+# In[31]:
 
 
 labels = ['no intervention', 'pre-processing (Reweighing)', 'in-processing (Adversarial Debiasing)', 'post-processing (Calibrated Equality Odds)']
 
 
-# In[ ]:
+# In[33]:
 
 
 plt.figure(figsize = (20, 10))
-plt.title('Accuracies after each intervention techniques applied')
+plt.title('Equality of Opportunity after each intervention techniques applied')
 plt.xlabel('Intervention technique')
-plt.ylabel('Accuracy')
-plt.plot(labels, accuracies, marker='.', markersize = 50)
+plt.ylabel('Equality of Opportunity')
+plt.plot(labels, eqopp, marker='.', markersize = 50)
 
 
 # In[ ]:
 
 
-plt.figure(figsize = (20, 10))
-plt.title('opportunities after each intervention techniques applied',fontsize=25)
-plt.xlabel('Intervention technique',fontsize=25)
-plt.ylabel('opportunity',fontsize=25)
-plt.plot(labels, np.abs(opportunities), marker='.', markersize = 50)
-plt.gca().yaxis.set_tick_params(labelsize=25)
-plt.gca().xaxis.set_tick_params(labelsize=15)
 
-
-# In[ ]:
-
-
-for lab,ac, op in zip(labels,accuracies,np.abs(opportunities)):
-    print(f"+ {lab}   give:\t\t accuracy =  {round(ac,5)}  | \t equalty_opportunity=  {round(op,5)}")
 
